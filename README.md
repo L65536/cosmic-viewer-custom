@@ -9,7 +9,7 @@ Takes 10 minutes to compile online.
 File size 69MB (original was 33MB). 
 Need to try other build/compile settings.
 
-## [] Auto maximize window on launch
+## [SKIP] Auto maximize window on launch
 
 ## [SKIP] Auto continue from last session on launch
 Use path in command line argument instead. 
@@ -35,7 +35,7 @@ Summary:
     iced::keyboard::{Key, Modifiers, key::Named},
     // iced::keyboard::{Key, Modifiers},
 
-    // for key [+] [-]
+    // for key [+] [-] # line 208 224
     modifiers: vec![]  
 
     // [F5]
@@ -49,7 +49,7 @@ Summary:
 ```
 ```
 [app.rs] // for [Home]/[End] = First/Last image
-ViewerMessage::KeyPressed(key, modifiers, text) => {
+#2316 ViewerMessage::KeyPressed(key, modifiers, text) => {
             
 if (matches!(key, Key::Named(Named::Home))|| matches!(key, Key::Named(Named::End)))
 {
@@ -98,7 +98,7 @@ if (matches!(key, Key::Named(Named::PageUp))|| matches!(key, Key::Named(Named::P
 }
 ```
 ```
-[viewer-canvas/src/program.rs] ViewerCanvas::update:
+[viewer-canvas/src/program.rs] Line #78
 MouseEvent::ButtonPressed(Button::Middle) => {
     Some(Action::publish(CanvasMessage::Fullscreen))
 }
