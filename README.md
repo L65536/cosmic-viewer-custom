@@ -107,7 +107,8 @@ MouseEvent::ButtonPressed(Button::Middle) => {
  
 ## [] Loading images from archives, e.g. ZIP // RAR CBR CBZ EPUB(ZIP)
 
-## [] New sidebar for folders/archives list view. (name/count/size/date)
+## [ALT] New sidebar for folders/archives list view. (name/count/size/date)
+Alternatively click on OSD brings out folder dialog, using parent path of current opened images.
 
 ## [] Jump to next folder/archive when going out of bound.	
 
