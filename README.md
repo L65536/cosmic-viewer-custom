@@ -1,3 +1,4 @@
+Disclaimer: Most of the codes in this fork are AI generated. 
 
 # Plans for the fork
 
@@ -109,3 +110,5 @@ MouseEvent::ButtonPressed(Button::Middle) => {
 ## [] New sidebar for folders/archives list view. (name/count/size/date)
 
 ## [] Jump to next folder/archive when going out of bound.	
+
+Disclaimer: Most of the codes in this fork are AI generated. 
