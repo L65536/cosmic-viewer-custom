@@ -1722,7 +1722,10 @@ impl Application for CosmicViewer {
                     text_color: Some(Color::WHITE),
                     ..Default::default()
                 });
-
+            
+            // Make just the badge clickable, not the full-size overlay.
+            let badge = mouse_area(badge).on_press(ViewerMessage::OpenFolderDialog);
+            
             stack![
                 canvas,
                 container(badge)
@@ -2037,29 +2040,39 @@ impl Application for CosmicViewer {
                         }
                     }
                 });
-            }
-            ViewerMessage::OpenFolderDialog => {
-                if self.guard_unsaved(ViewerMessage::OpenFolderDialog) {
-                    return Task::none();
-                }
-                return future(async move {
-                    let dialog = file_chooser::open::Dialog::new().title("Open Folder");
+            }            
+ViewerMessage::OpenFolderDialog => {
+    if self.guard_unsaved(ViewerMessage::OpenFolderDialog) {
+        return Task::none();
+    }
 
-                    match dialog.open_folder().await {
-                        Ok(response) => response.url().to_file_path().map_or_else(
-                            |()| Action::App(ViewerMessage::Cancelled),
-                            |path| Action::App(ViewerMessage::Open(path)),
-                        ),
-                        Err(file_chooser::Error::Cancelled) => {
-                            Action::App(ViewerMessage::Cancelled)
-                        }
-                        Err(e) => {
-                            tracing::error!("Folder dialog error: {e}");
-                            Action::App(ViewerMessage::Cancelled)
-                        }
-                    }
-                });
+    let starting_directory = self
+        .nav
+        .current()
+        .and_then(|image_path| image_path.parent())
+        .and_then(Path::parent)
+        .map(Path::to_path_buf);
+
+    return future(async move {
+        let mut dialog = file_chooser::open::Dialog::new().title("Open Folder");
+
+        if let Some(directory) = starting_directory {
+            dialog = dialog.directory(directory);
+        }
+
+        match dialog.open_folder().await {
+            Ok(response) => response.url().to_file_path().map_or_else(
+                |()| Action::App(ViewerMessage::Cancelled),
+                |path| Action::App(ViewerMessage::Open(path)),
+            ),
+            Err(file_chooser::Error::Cancelled) => Action::App(ViewerMessage::Cancelled),
+            Err(e) => {
+                tracing::error!("Folder dialog error: {e}");
+                Action::App(ViewerMessage::Cancelled)
             }
+        }
+    });
+}
             ViewerMessage::Open(path) => tasks.push(self.open_path(path)),
             ViewerMessage::OpenRecent(_idx) => {}
             ViewerMessage::OpenContaining => {
