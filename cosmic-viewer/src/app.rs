@@ -1750,7 +1750,7 @@ impl Application for CosmicViewer {
 
         let main = Column::new()
             .push(image_area)
-            .push_maybe(has_image.then(|| {
+            .push_maybe((has_image && !self.is_fullscreen).then(|| {
                 container(self.build_toolbar())
                     .center_x(Length::Fill)
                     .padding([spacing.space_xxs, 0, spacing.space_xxs, 0])
