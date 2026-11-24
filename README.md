@@ -28,10 +28,26 @@ Use path in command line argument instead.
 ```
 Mouse scroll = page up/down
 [+] [-] = Zoom
-[F5] [F11] [mid-click] = Full screen toggle
+[F5] [mid-click] = Full screen toggle
 [Home]/[End] = First/Last image
-```
+// [F11] was already used for windowed/maximize toggle.(by OS/DE?)
 
+[key_binds.rs]
+    iced::keyboard::{Key, Modifiers, key::Named},
+    // iced::keyboard::{Key, Modifiers},
+
+    // for key [+] [-]
+    modifiers: vec![]  
+
+    // [F5]
+    binds.insert(
+        KeyBind {
+            modifiers: vec![],
+            key: Key::Named(Named::F5),
+        },
+        MenuAction::Fullscreen,
+    );
+```
 [] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
 
 [] Loading images from archives, e.g. ZIP // RAR CBR CBZ EPUB(ZIP)
