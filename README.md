@@ -24,14 +24,15 @@ Use path in command line argument instead.
 .push_maybe((has_image && !self.is_fullscreen).then(|| {
 ```
 
-[] Add/Change key/mouse bindings
+[DONE] Add/Change key/mouse bindings
 ```
-Mouse scroll = page up/down
+[PgUp][PgDn] = Page up/down
 [+] [-] = Zoom
-[F5] [mid-click] = Full screen toggle
-[Home]/[End] = First/Last image
-// [F11] was already used for windowed/maximize toggle.(by OS/DE?)
-
+[F5] [middle-click] = Full screen toggle
+[Home] [End] = First or Last page
+// [F11] was already used for windowed/maximized toggle.(by OS/DE)
+```
+```
 [key_binds.rs]
     iced::keyboard::{Key, Modifiers, key::Named},
     // iced::keyboard::{Key, Modifiers},
@@ -47,7 +48,8 @@ Mouse scroll = page up/down
         },
         MenuAction::Fullscreen,
     );
-
+```
+```
 [app.rs] // for [Home]/[End] = First/Last image
 ViewerMessage::KeyPressed(key, modifiers, text) => {
             
@@ -68,8 +70,40 @@ if (matches!(key, Key::Named(Named::Home))|| matches!(key, Key::Named(Named::End
             self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
         ]);
     }
-}            
+}
 
+// [PgUp][PgDn] = page up/down            
+if (matches!(key, Key::Named(Named::PageUp))|| matches!(key, Key::Named(Named::PageDown)))
+{
+    let total = self.nav.total();
+    if total > 0 {
+        let current = self.nav.index().unwrap_or(0);
+        let idx = if matches!(key, Key::Named(Named::PageUp)) {
+            current.saturating_sub(1)
+        } else {
+            (current + 1).min(total - 1)
+        };
+
+        if self.nav.index() != Some(idx) {
+            let thumbnail_size = self.config.thumbnail_size.pixels();
+            let spacing = f32::from(theme::active().cosmic().spacing.space_s);
+
+            return Task::batch(vec![
+                self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx))),
+                self.update(ViewerMessage::Nav(NavMessage::GridScroll(
+                    idx as f32 * (thumbnail_size as f32 + spacing),
+                ))),
+                self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
+            ]);
+        }
+    }
+}
+```
+```
+[viewer-canvas/src/program.rs] ViewerCanvas::update:
+MouseEvent::ButtonPressed(Button::Middle) => {
+    Some(Action::publish(CanvasMessage::Fullscreen))
+}
 ```
 [] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
 
