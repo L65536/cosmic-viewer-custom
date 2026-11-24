@@ -75,6 +75,9 @@ impl Program<CanvasMessage, Theme, Renderer> for ViewerCanvas<'_> {
 
         match event {
             Event::Mouse(mouse_event) => match mouse_event {
+                MouseEvent::ButtonPressed(Button::Middle) => {
+                    Some(Action::publish(CanvasMessage::Fullscreen))
+                }
                 MouseEvent::ButtonPressed(Button::Right) => {
                     Some(Action::publish(CanvasMessage::ContextMenu(Some(position))))
                 }
