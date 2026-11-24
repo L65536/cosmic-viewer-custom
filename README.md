@@ -103,7 +103,7 @@ MouseEvent::ButtonPressed(Button::Middle) => {
     Some(Action::publish(CanvasMessage::Fullscreen))
 }
 ```
-## [] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
+## [DONE] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
  
 ## [] Loading images from archives, e.g. ZIP // RAR CBR CBZ EPUB(ZIP)
 
