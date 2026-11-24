@@ -1,7 +1,7 @@
 
 # Plans for the fork
 
-[DONE] Add /.github/workflows/build.yml for Github Actions to build executables on workflow_dispatch(manual trigger).
+[DONE] Add /.github/workflows/build.yml for Github Actions to build executables on workflow_dispatch (manual trigger).
 ```
 Takes 10 minutes to compile online. 
 2 minutes to download.
@@ -17,12 +17,14 @@ Need to try other build/compile settings.
 [] Remove toolbar in full screen mode
 
 [] Add/Change key/mouse bindings
-	Mouse scroll = page up/down
-	+- = Zoom
-	F5 F11 mid-click = Full screen toggle
-	Home/End = First/Last image
+```
+Mouse scroll = page up/down
+[+] [-] = Zoom
+[F5] [F11] [mid-click] = Full screen toggle
+[Home]/[End] = First/Last image
+```
 
-[] Add OSD [current/total][folder_name/filename][image_resolution] to buttom left corner.
+[] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
 
 [] Loading images from archives, e.g. ZIP // RAR CBR CBZ EPUB(ZIP)
 
