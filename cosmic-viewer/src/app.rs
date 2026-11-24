@@ -1689,18 +1689,63 @@ impl Application for CosmicViewer {
     #[allow(clippy::too_many_lines)]
     fn view(&self) -> Element<'_, Self::Message> {
         let has_image = self.viewport.image().is_some();
+
         let content: Element<'_, Self::Message> = if has_image {
-            self.viewport.element().map(ViewerMessage::Canvas)
+        let canvas = self.viewport.element().map(ViewerMessage::Canvas);
+
+        if let Some(path) = self.nav.current() {
+            let position = self.nav.index().map_or(0, |idx| idx + 1);
+            let folder = path
+                .parent()
+                .and_then(Path::file_name)
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            let filename = path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+
+            let resolution = self.viewport.image_size().map_or_else(
+                String::new,
+                |size| format!("{:.0} × {:.0}", size.width, size.height),
+            );
+
+            let label = format!(
+                "{position}/{}  {folder}/{filename}  {resolution}",
+                self.nav.total(),
+            );
+
+            let badge = container(text::caption(label))
+                .padding(8)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(Color::from_rgba(
+                        0.0, 0.0, 0.0, 0.65,
+                    ))),
+                    text_color: Some(Color::WHITE),
+                    ..Default::default()
+                });
+
+            stack![
+                canvas,
+                container(badge)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Horizontal::Left)
+                    .align_y(Vertical::Bottom)
+                    .padding(12),
+            ]
+            .into()
         } else {
-            Column::new()
-                .push(Space::new().height(Length::Fill))
-                .push(text("No image selected").center())
-                .push(Space::new().height(Length::Fill))
-                .align_x(Horizontal::Center)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        };
+            canvas
+        }
+    } else {
+        Column::new()
+            .push(Space::new().height(Length::Fill))
+            .push(text("No image selected").center())
+            .push(Space::new().height(Length::Fill))
+            .align_x(Horizontal::Center)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    };
 
         let spacing = cosmic::theme::active().cosmic().spacing;
 
