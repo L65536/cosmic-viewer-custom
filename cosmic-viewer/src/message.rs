@@ -14,6 +14,7 @@ use std::{path::PathBuf, sync::Arc};
 use trash::TrashItem;
 use viewer_canvas::CanvasMessage;
 use viewer_config::AppTheme;
+use viewer_core::{ArchiveCatalog, LoadedArchiveImage};
 use viewer_tools::{
     annotate::{AnnotateColor, AnnotateTool},
     crop::CropRatio,
@@ -52,6 +53,8 @@ pub enum ViewerMessage {
     LaunchUrl(String),
     NavScroll(Viewport),
     Open(PathBuf),
+    ArchiveOpened(u64, Result<ArchiveCatalog, String>),
+    ArchiveImageLoaded(u64, usize, Result<LoadedArchiveImage, String>),
     OpenFileDialog,
     OpenFolderDialog,
     OpenRecent(usize),
@@ -89,7 +92,7 @@ pub enum ViewerMessage {
 
 #[derive(Debug, Clone)]
 pub enum NavMessage {
-    ScanComplete(PathBuf, Vec<PathBuf>, Option<PathBuf>),
+    ScanComplete(PathBuf, Vec<PathBuf>, Option<PathBuf>, u64),
     DirectoryRefreshed(Vec<PathBuf>),
     NavThumbnailShow(usize),
     NavThumbnailHide(usize),

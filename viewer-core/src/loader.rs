@@ -8,11 +8,12 @@ use resvg::{tiny_skia, usvg};
 use std::{
     fmt::{self, Debug, Formatter},
     fs::{self, File},
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 use thiserror::Error;
 use turbojpeg::{Decompressor, Image, PixelFormat, ScalingFactor};
+use zune_core::options::DecoderOptions;
 use zune_image::codecs::bmp::zune_core::colorspace::ColorSpace;
 use zune_image::image::Image as ZuneImage;
 
@@ -39,6 +40,13 @@ pub struct LoadedImage {
     pub width: u32,
     pub height: u32,
     pub path: PathBuf,
+}
+
+pub(crate) struct DecodedImage {
+    pub handle: Handle,
+    pub image: DynamicImage,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Debug for LoadedImage {
@@ -123,6 +131,103 @@ fn load_image_sync(path: &Path) -> Result<LoadedImage, LoadError> {
         width,
         height,
         path: path.to_path_buf(),
+    })
+}
+
+pub(crate) fn decode_image_bytes(data: &[u8], extension: &str) -> Result<DecodedImage, LoadError> {
+    if extension.eq_ignore_ascii_case("svg") {
+        let tree = usvg::Tree::from_data(data, &usvg::Options::default())
+            .map_err(|error| LoadError::UnsupportedFormat(format!("SVG: {error}")))?;
+        let (width, height) = svg_fit_dimensions(&tree, MAX_TEX);
+        let pixels = render_svg(&tree, width, height)?;
+        let handle = Handle::from_rgba(width, height, pixels.clone());
+        let rgba = RgbaImage::from_raw(width, height, pixels)
+            .expect("SVG pixel buffer matches dimensions");
+        return Ok(DecodedImage {
+            handle,
+            image: DynamicImage::ImageRgba8(rgba),
+            width,
+            height,
+        });
+    }
+
+    if matches!(extension.to_ascii_lowercase().as_str(), "heif" | "heic") {
+        let context = HeifContext::read_from_bytes(data)
+            .map_err(|error| LoadError::UnsupportedFormat(format!("HEIF: {error}")))?;
+        return decode_heif_context(context);
+    }
+
+    if is_zune_supported(&extension.to_ascii_lowercase())
+        && let Ok(decoded) = decode_zune_bytes(data)
+    {
+        return Ok(decoded);
+    }
+
+    let mut reader = image::ImageReader::new(Cursor::new(data)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(32_768);
+    limits.max_image_height = Some(32_768);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode()?;
+    let (width, height) = (image.width(), image.height());
+    if u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4)
+        > 256 * 1024 * 1024
+    {
+        return Err(LoadError::UnsupportedFormat(
+            "Decoded image exceeds the memory limit".into(),
+        ));
+    }
+    let handle = display_handle(&image);
+
+    Ok(DecodedImage {
+        handle,
+        image,
+        width,
+        height,
+    })
+}
+
+fn decode_zune_bytes(data: &[u8]) -> Result<DecodedImage, LoadError> {
+    let options = DecoderOptions::default()
+        .set_max_width(8192)
+        .set_max_height(8192);
+    let mut image = ZuneImage::read(Cursor::new(data), options)
+        .map_err(|error| LoadError::UnsupportedFormat(error.to_string()))?;
+    image
+        .convert_color(ColorSpace::RGBA)
+        .map_err(|error| LoadError::UnsupportedFormat(error.to_string()))?;
+    let (width, height) = image.dimensions();
+    let width = u32::try_from(width)
+        .map_err(|_| LoadError::UnsupportedFormat("Image width is too large".into()))?;
+    let height = u32::try_from(height)
+        .map_err(|_| LoadError::UnsupportedFormat("Image height is too large".into()))?;
+    if u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4)
+        > 256 * 1024 * 1024
+    {
+        return Err(LoadError::UnsupportedFormat(
+            "Decoded image exceeds the memory limit".into(),
+        ));
+    }
+    let pixels = image
+        .flatten_to_u8()
+        .into_iter()
+        .next()
+        .ok_or_else(|| LoadError::UnsupportedFormat("No pixel data".into()))?;
+    let rgba = RgbaImage::from_raw(width, height, pixels)
+        .ok_or_else(|| LoadError::UnsupportedFormat("Invalid pixel buffer".into()))?;
+    let image = DynamicImage::ImageRgba8(rgba);
+    let handle = display_handle(&image);
+
+    Ok(DecodedImage {
+        handle,
+        image,
+        width,
+        height,
     })
 }
 
@@ -750,13 +855,36 @@ fn load_heif(path: &Path) -> Result<LoadedImage, LoadError> {
         .to_str()
         .ok_or_else(|| LoadError::UnsupportedFormat("HEIF: non-UTF-8 path".into()))?;
 
-    let lib = LibHeif::new();
     let ctx = HeifContext::read_from_file(name)
         .map_err(|e| LoadError::UnsupportedFormat(format!("HEIF: {e}")))?;
+    let decoded = decode_heif_context(ctx)?;
 
+    Ok(LoadedImage {
+        handle: decoded.handle,
+        image: decoded.image,
+        width: decoded.width,
+        height: decoded.height,
+        path: path.to_path_buf(),
+    })
+}
+
+fn decode_heif_context(ctx: HeifContext<'_>) -> Result<DecodedImage, LoadError> {
+    const HEIF_MEMORY_LIMIT: u64 = 256 * 1024 * 1024;
+    let lib = LibHeif::new();
     let handle = ctx
         .primary_image_handle()
         .map_err(|e| LoadError::UnsupportedFormat(format!("HEIF: {e}")))?;
+    let width = handle.width();
+    let height = handle.height();
+    if u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4)
+        > HEIF_MEMORY_LIMIT
+    {
+        return Err(LoadError::UnsupportedFormat(
+            "Decoded HEIF exceeds the memory limit".into(),
+        ));
+    }
 
     let img = lib
         .decode(&handle, HeifColorSpace::Rgb(RgbChroma::Rgba), None)
@@ -778,10 +906,20 @@ fn load_heif(path: &Path) -> Result<LoadedImage, LoadError> {
             "HEIF: invalid dimensions".into(),
         ));
     }
+    if u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4)
+        > HEIF_MEMORY_LIMIT
+    {
+        return Err(LoadError::UnsupportedFormat(
+            "Decoded HEIF exceeds the memory limit".into(),
+        ));
+    }
 
     let stride = plane.stride;
     let row_bytes = width as usize * 4;
-    if stride < row_bytes || plane.data.len() < stride * height as usize {
+    let plane_size = stride.checked_mul(height as usize);
+    if stride < row_bytes || plane_size.is_none_or(|size| plane.data.len() < size) {
         return Err(LoadError::UnsupportedFormat(
             "HEIF: truncated pixel data".into(),
         ));
@@ -793,16 +931,17 @@ fn load_heif(path: &Path) -> Result<LoadedImage, LoadError> {
         pixels.extend_from_slice(&plane.data[row_start..row_start + row_bytes]);
     }
 
-    let handle_rgba = Handle::from_rgba(width, height, pixels.clone());
+    let handle_rgba = display_handle(&DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(width, height, pixels.clone()).expect("HEIF dimensions are valid"),
+    ));
     let rgba_image =
         RgbaImage::from_raw(width, height, pixels).expect("pixel buffer matches dimensions");
 
-    Ok(LoadedImage {
+    Ok(DecodedImage {
         handle: handle_rgba,
         image: DynamicImage::ImageRgba8(rgba_image),
         width,
         height,
-        path: path.to_path_buf(),
     })
 }
 

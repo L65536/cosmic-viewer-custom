@@ -13,7 +13,7 @@ use std::{collections::HashMap, sync::LazyLock};
 static MENU_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(|| cosmic::widget::Id::new("responsive-menu"));
 
-fn build_file_menu(has_image: bool) -> Vec<menu::Item<MenuAction, String>> {
+fn build_file_menu(has_image: bool, read_only: bool) -> Vec<menu::Item<MenuAction, String>> {
     let mut items = vec![menu::Item::Button(
         fl!("menu-open-file"),
         None,
@@ -26,15 +26,23 @@ fn build_file_menu(has_image: bool) -> Vec<menu::Item<MenuAction, String>> {
         MenuAction::OpenFolder,
     ));
 
-    items.push(menu::Item::Button(
-        fl!("menu-open-containing"),
-        None,
-        MenuAction::OpenContaining,
-    ));
+    items.push(if read_only {
+        menu::Item::ButtonDisabled(
+            fl!("menu-open-containing"),
+            None,
+            MenuAction::OpenContaining,
+        )
+    } else {
+        menu::Item::Button(
+            fl!("menu-open-containing"),
+            None,
+            MenuAction::OpenContaining,
+        )
+    });
 
     items.push(menu::Item::Divider);
 
-    let make_button = if has_image {
+    let make_button = if has_image && !read_only {
         |name: String, keybind, action: MenuAction| menu::Item::Button(name, keybind, action)
     } else {
         |name, keybind, action| menu::Item::ButtonDisabled(name, keybind, action)
@@ -66,8 +74,9 @@ fn build_edit_menu(
     can_undo: bool,
     can_redo: bool,
     has_image: bool,
+    read_only: bool,
 ) -> Vec<menu::Item<MenuAction, String>> {
-    let make_button = if has_image {
+    let make_button = if has_image && !read_only {
         |name: String, keybind, action: MenuAction| menu::Item::Button(name, keybind, action)
     } else {
         |name, keybind, action| menu::Item::ButtonDisabled(name, keybind, action)
@@ -140,9 +149,10 @@ pub fn menu_bar<'a>(
     can_undo: bool,
     can_redo: bool,
     has_image: bool,
+    read_only: bool,
 ) -> Element<'a, ViewerMessage> {
-    let file_menu = build_file_menu(has_image);
-    let edit_menu = build_edit_menu(can_undo, can_redo, has_image);
+    let file_menu = build_file_menu(has_image, read_only);
+    let edit_menu = build_edit_menu(can_undo, can_redo, has_image, read_only);
     let view_menu = build_view_menu(has_image);
 
     responsive_menu_bar()

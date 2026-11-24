@@ -53,6 +53,8 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread", "sync", "fs"] }
 tracing = "0.1.44"
 turbojpeg = "1.4.0"
 zune-image = "0.5.0"
+zune-core = "0.5.0"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 
 [workspace.dependencies.libcosmic]

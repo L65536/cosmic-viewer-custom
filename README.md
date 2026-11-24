@@ -4,9 +4,9 @@ Disclaimer: Most of the codes in this fork are AI generated.
 
 ## [DONE] Add /.github/workflows/build.yml 
 for Github Actions to build executables on workflow_dispatch (manual trigger).
-Takes 10 minutes to compile online for the first run. 
-2 minutes for the 2nd run.
-File size 69MB (original was 33MB) compressed to 20MB download. 
+Takes 10 minutes to compile online. 
+2 minutes to download.
+File size 69MB (original was 33MB). 
 Need to try other build/compile settings.
 
 ## [SKIP] Auto maximize window on launch
@@ -103,12 +103,12 @@ MouseEvent::ButtonPressed(Button::Middle) => {
     Some(Action::publish(CanvasMessage::Fullscreen))
 }
 ```
-## [DONE] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
+## [] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
  
-## [] Loading images from archives, e.g. ZIP // RAR CBR CBZ EPUB(ZIP)
+## [DONE] Browse images in ZIP archives
+ZIP archives open in a separate read-only mode; archive members are decoded in memory without extraction.
 
-## [ALT] New sidebar for folders/archives list view. (name/count/size/date)
-Alternatively click on OSD brings out folder dialog, using parent path of current opened images.
+## [] New sidebar for folders/archives list view. (name/count/size/date)
 
 ## [] Jump to next folder/archive when going out of bound.	
 

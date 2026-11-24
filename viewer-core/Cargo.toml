@@ -21,6 +21,8 @@ rayon.workspace = true
 resvg.workspace = true
 turbojpeg.workspace = true
 zune-image.workspace = true
+zune-core.workspace = true
+zip.workspace = true
 
 viewer-config = { path = "../viewer-config" }
 

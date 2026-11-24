@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+pub mod archive;
 pub mod cache;
 pub mod clipboard;
 pub mod loader;
 pub mod nav;
 
 // Re-exports
+pub use archive::{ArchiveCatalog, ArchiveEntry, ArchiveError, LoadedArchiveImage};
 pub use cache::{CachedImage, ImageCache};
 pub use clipboard::{ClipboardImage, image_mime_type};
 pub use loader::{LoadError, LoadedImage, load_image, load_thumbnail, read_dpi};

@@ -206,7 +206,7 @@ pub fn is_supported_image(path: &Path) -> bool {
         .is_some_and(|ext| EXTENSIONS.contains(&ext.to_lowercase().as_str()))
 }
 
-fn natural_cmp(a: &str, b: &str) -> Ordering {
+pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
     let mut a_chars = a.chars().peekable();
     let mut b_chars = b.chars().peekable();
 
@@ -216,7 +216,7 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
             (Some(ac), Some(bc)) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
-                match collect_number(&mut a_chars).cmp(&collect_number(&mut b_chars)) {
+                match compare_number(&collect_number(&mut a_chars), &collect_number(&mut b_chars)) {
                     Ordering::Equal => {}
                     other => return other,
                 }
@@ -240,17 +240,26 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
-fn collect_number(chars: &mut std::iter::Peekable<std::str::Chars>) -> u64 {
-    let mut num: u64 = 0;
+fn collect_number(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut digits = String::new();
 
     while let Some(&c) = chars.peek() {
         if c.is_ascii_digit() {
-            num = num * 10 + (c as u64 - '0' as u64);
+            digits.push(c);
             chars.next();
         } else {
             break;
         }
     }
 
-    num
+    digits
+}
+
+fn compare_number(a: &str, b: &str) -> Ordering {
+    let a_significant = a.trim_start_matches('0');
+    let b_significant = b.trim_start_matches('0');
+    a_significant
+        .len()
+        .cmp(&b_significant.len())
+        .then_with(|| a_significant.cmp(b_significant))
 }
