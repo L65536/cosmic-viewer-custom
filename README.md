@@ -47,6 +47,29 @@ Mouse scroll = page up/down
         },
         MenuAction::Fullscreen,
     );
+
+[app.rs] // for [Home]/[End] = First/Last image
+ViewerMessage::KeyPressed(key, modifiers, text) => {
+            
+if (matches!(key, Key::Named(Named::Home))|| matches!(key, Key::Named(Named::End)))
+{
+    let idx = if matches!(key, Key::Named(Named::Home)) {0} else {self.nav.total().saturating_sub(1)};
+
+    if self.nav.total() > 0 {
+        let thumbnail_size = self.config.thumbnail_size.pixels();
+        let t = theme::active();
+        let space_s = f32::from(t.cosmic().spacing.space_s);
+
+        return Task::batch(vec![
+            self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx))),
+            self.update(ViewerMessage::Nav(NavMessage::GridScroll(
+                idx as f32 * (thumbnail_size as f32 + space_s),
+            ))),
+            self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
+        ]);
+    }
+}            
+
 ```
 [] Add OSD [current/total][folder_name/filename][image_resolution] to lower left corner.
 
