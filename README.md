@@ -4,9 +4,9 @@ Disclaimer: Most of the codes in this fork are AI generated.
 
 ## [DONE] Add /.github/workflows/build.yml 
 for Github Actions to build executables on workflow_dispatch (manual trigger).
-Takes 10 minutes to compile online. 
-2 minutes to download.
-File size 69MB (original was 33MB). 
+Takes 10 minutes to compile online for the first run. 
+2 minutes for the 2nd run.
+File size 69MB (original was 33MB) compressed to 20MB download. 
 Need to try other build/compile settings.
 
 ## [SKIP] Auto maximize window on launch
