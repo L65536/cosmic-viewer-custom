@@ -12,9 +12,17 @@ Need to try other build/compile settings.
 
 [] Auto maximize window on launch
 
-[] Auto continue from last session on launch
+[SKIP] Auto continue from last session on launch
+```
+Use path in command line argument instead. 
+```
 
-[] Remove toolbar in full screen mode
+[DONE] Remove toolbar in full screen mode
+```
+[app.rs]
+.push_maybe(has_image.then(|| {    
+.push_maybe((has_image && !self.is_fullscreen).then(|| {
+```
 
 [] Add/Change key/mouse bindings
 ```
