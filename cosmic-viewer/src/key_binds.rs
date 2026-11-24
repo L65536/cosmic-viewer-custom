@@ -2,7 +2,7 @@
 
 use crate::message::{ContextMessage, EditMessage, ViewerMessage};
 use cosmic::{
-    iced::keyboard::{Key, Modifiers},
+    iced::keyboard::{Key, Modifiers, key::Named},
     widget::menu::{
         Action,
         key_bind::{KeyBind, Modifier},
@@ -205,7 +205,7 @@ pub fn init_keybinds() -> HashMap<KeyBind, MenuAction> {
 
     binds.insert(
         KeyBind {
-            modifiers: vec![Modifier::Ctrl],
+            modifiers: vec![],
             key: Key::Character("+".into()),
         },
         MenuAction::ZoomIn,
@@ -221,12 +221,20 @@ pub fn init_keybinds() -> HashMap<KeyBind, MenuAction> {
 
     binds.insert(
         KeyBind {
-            modifiers: vec![Modifier::Ctrl],
+            modifiers: vec![],
             key: Key::Character("-".into()),
         },
         MenuAction::ZoomOut,
     );
-
+    
+    binds.insert(
+        KeyBind {
+            modifiers: vec![],
+            key: Key::Named(Named::F5),
+        },
+        MenuAction::Fullscreen,
+    );
+    
     binds.insert(
         KeyBind {
             modifiers: vec![Modifier::Ctrl],
