@@ -2314,6 +2314,53 @@ impl Application for CosmicViewer {
                 self.toasts.remove(toast_id);
             }
             ViewerMessage::KeyPressed(key, modifiers, text) => {
+                
+// for [Home]/[End] = First/Last image            
+if (matches!(key, Key::Named(Named::Home))|| matches!(key, Key::Named(Named::End)))
+{
+    let idx = if matches!(key, Key::Named(Named::Home)) {0} else {self.nav.total().saturating_sub(1)};
+
+    if self.nav.total() > 0 {
+        let thumbnail_size = self.config.thumbnail_size.pixels();
+        let t = theme::active();
+        let space_s = f32::from(t.cosmic().spacing.space_s);
+
+        return Task::batch(vec![
+            self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx))),
+            self.update(ViewerMessage::Nav(NavMessage::GridScroll(
+                idx as f32 * (thumbnail_size as f32 + space_s),
+            ))),
+            self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
+        ]);
+    }
+}
+
+// [PgUp][PgDn] = page up/down            
+if (matches!(key, Key::Named(Named::PageUp))|| matches!(key, Key::Named(Named::PageDown)))
+{
+    let total = self.nav.total();
+    if total > 0 {
+        let current = self.nav.index().unwrap_or(0);
+        let idx = if matches!(key, Key::Named(Named::PageUp)) {
+            current.saturating_sub(1)
+        } else {
+            (current + 1).min(total - 1)
+        };
+
+        if self.nav.index() != Some(idx) {
+            let thumbnail_size = self.config.thumbnail_size.pixels();
+            let spacing = f32::from(theme::active().cosmic().spacing.space_s);
+
+            return Task::batch(vec![
+                self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx))),
+                self.update(ViewerMessage::Nav(NavMessage::GridScroll(
+                    idx as f32 * (thumbnail_size as f32 + spacing),
+                ))),
+                self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
+            ]);
+        }
+    }
+}
                 if self.context_menu_position.is_some() && matches!(key, Key::Named(Named::Escape))
                 {
                     self.context_menu_position = None;
