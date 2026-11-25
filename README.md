@@ -19,6 +19,8 @@ When viewing a ZIP, the sidebar lists ZIP files in the same folder with their
 sizes in MB. Click a row to open that archive; the current archive is highlighted.
 Scrolling over the image turns pages in both regular-image and ZIP viewing modes.
 Mouse-wheel and keyboard page turns are rate-limited to one every 100 ms.
+In ZIP mode, additional turns are dropped while an entry is loading and until the
+displayed entry has remained visible for at least 100 ms.
 
 ## [Workflow] Added /.github/workflows/build.yml 
 for Github Actions to build executables on workflow_dispatch (manual trigger).

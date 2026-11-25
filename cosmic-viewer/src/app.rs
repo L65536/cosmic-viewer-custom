@@ -101,6 +101,18 @@ fn page_turn_allowed(last_turn: Option<Instant>, now: Instant) -> bool {
     last_turn.is_none_or(|last| now.duration_since(last) >= PAGE_TURN_RATE_LIMIT)
 }
 
+fn archive_display_request_allowed(
+    queued_index: Option<usize>,
+    last_displayed_at: Option<Instant>,
+    read_queue_full: bool,
+    now: Instant,
+) -> bool {
+    queued_index.is_none()
+        && !read_queue_full
+        && last_displayed_at
+            .is_none_or(|shown_at| now.duration_since(shown_at) >= PAGE_TURN_RATE_LIMIT)
+}
+
 struct ArchiveCachedImage {
     handle: Handle,
     image: DynamicImage,
@@ -112,6 +124,8 @@ struct ArchiveView {
     catalog: ArchiveCatalog,
     generation: u64,
     index: usize,
+    display_queue_index: Option<usize>,
+    last_displayed_at: Option<Instant>,
     cache: HashMap<usize, ArchiveCachedImage>,
     pending: HashSet<usize>,
 }
@@ -262,9 +276,9 @@ pub struct CosmicViewer {
 }
 
 fn trim_archive_cache(archive: &mut ArchiveView) {
-    let start = archive.index.saturating_sub(3);
-    let end = archive
-        .index
+    let center = archive.display_queue_index.unwrap_or(archive.index);
+    let start = center.saturating_sub(3);
+    let end = center
         .saturating_add(3)
         .min(archive.catalog.entries().len().saturating_sub(1));
     archive
@@ -280,13 +294,13 @@ fn trim_archive_cache(archive: &mut ArchiveView) {
         let backward = archive
             .cache
             .keys()
-            .filter(|index| **index < archive.index)
+            .filter(|index| **index < center)
             .min()
             .copied();
         let forward = archive
             .cache
             .keys()
-            .filter(|index| **index > archive.index)
+            .filter(|index| **index > center)
             .max()
             .copied();
         let victim = backward
@@ -506,16 +520,17 @@ impl CosmicViewer {
             return Task::none();
         };
         let total = archive.catalog.entries().len();
-        if archive.index >= total {
+        let center = archive.display_queue_index.unwrap_or(archive.index);
+        if center >= total {
             return Task::none();
         }
 
         trim_archive_cache(archive);
         let generation = archive.generation;
         let catalog = archive.catalog.clone();
-        let end = (archive.index + 4).min(total);
+        let end = (center + 4).min(total);
         let mut tasks = Vec::new();
-        for index in archive.index..end {
+        for index in center..end {
             if archive.cache.contains_key(&index) || !archive.pending.insert(index) {
                 continue;
             }
@@ -558,16 +573,27 @@ impl CosmicViewer {
     }
 
     fn select_archive_image(&mut self, index: usize) -> Task<Action<ViewerMessage>> {
+        if self.archive.as_ref().is_some_and(|archive| {
+            !archive_display_request_allowed(
+                archive.display_queue_index,
+                archive.last_displayed_at,
+                archive_read_queue_is_full(),
+                Instant::now(),
+            )
+        }) {
+            return Task::none();
+        }
+
         let Some(archive) = self.archive.as_mut() else {
             return Task::none();
         };
         if index >= archive.catalog.entries().len() {
             return Task::none();
         }
-        archive.index = index;
-        trim_archive_cache(archive);
-
         if let Some(cached) = archive.cache.get(&index) {
+            archive.index = index;
+            archive.display_queue_index = None;
+            archive.last_displayed_at = Some(Instant::now());
             self.viewport.set_image(
                 Some(CanvasImage {
                     handle: cached.handle.clone(),
@@ -576,7 +602,10 @@ impl CosmicViewer {
                 }),
                 None,
             );
+        } else {
+            archive.display_queue_index = Some(index);
         }
+        trim_archive_cache(archive);
         self.viewport.cancel_tool();
         self.text_editing = false;
 
@@ -2198,9 +2227,10 @@ impl Application for CosmicViewer {
                         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
                     let position = archive.index + 1;
                     let label = format!(
-                        "{filename} / {} — {position}/{}",
-                        entry.name,
-                        archive.catalog.entries().len()
+//                        "{filename} / {} — {position}/{}",
+                        "{position} / {}   {filename} / {}",                        
+                        archive.catalog.entries().len(),
+                        entry.name,                        
                     );
                     let badge =
                         container(text::caption(label))
@@ -2240,7 +2270,7 @@ impl Application for CosmicViewer {
                 });
 
                 let label = format!(
-                    "{position}/{}  {folder}/{filename}  {resolution}",
+                    "{position} / {}   {folder} / {filename}   {resolution}",
                     self.image_total(),
                 );
 
@@ -2653,10 +2683,13 @@ impl Application for CosmicViewer {
                             ));
                             tasks.push(self.toasts.push(toast).map(Action::App));
                         }
+                        let display_queue_index = (!catalog.entries().is_empty()).then_some(0);
                         self.archive = Some(ArchiveView {
                             catalog,
                             generation,
                             index: 0,
+                            display_queue_index,
+                            last_displayed_at: None,
                             cache: HashMap::new(),
                             pending: HashSet::new(),
                         });
@@ -2698,60 +2731,75 @@ impl Application for CosmicViewer {
                 }
             }
             ViewerMessage::ArchiveImageLoaded(generation, index, result) => {
-                let Some(archive) = self.archive.as_mut() else {
-                    return Task::none();
+                let display_changed = {
+                    let Some(archive) = self.archive.as_mut() else {
+                        return Task::none();
+                    };
+                    if generation != archive.generation {
+                        return Task::none();
+                    }
+                    archive.pending.remove(&index);
+                    match result {
+                        Ok(loaded) => {
+                            let center = archive.display_queue_index.unwrap_or(archive.index);
+                            let first = center.saturating_sub(3);
+                            let last = center
+                                .saturating_add(3)
+                                .min(archive.catalog.entries().len().saturating_sub(1));
+                            if index < first || index > last {
+                                return Task::none();
+                            }
+                            let image = ArchiveCachedImage {
+                                handle: loaded.handle.clone(),
+                                image: loaded.image,
+                                width: loaded.width,
+                                height: loaded.height,
+                            };
+                            let selected = archive.display_queue_index == Some(index);
+                            archive.cache.insert(index, image);
+                            if selected {
+                                archive.index = index;
+                                archive.display_queue_index = None;
+                                archive.last_displayed_at = Some(Instant::now());
+                            }
+                            trim_archive_cache(archive);
+                            if selected {
+                                self.viewport.set_image(
+                                    Some(CanvasImage {
+                                        handle: loaded.handle,
+                                        width: loaded.width,
+                                        height: loaded.height,
+                                    }),
+                                    None,
+                                );
+                            }
+                            selected
+                        }
+                        Err(error) => {
+                            let member = archive.catalog.entries().get(index).map_or_else(
+                                || format!("entry {index}"),
+                                |entry| entry.name.clone(),
+                            );
+                            let selected = archive.display_queue_index == Some(index);
+                            if selected {
+                                archive.display_queue_index = None;
+                            }
+                            tracing::error!("Failed to load {member} from ZIP archive: {error}");
+                            if selected {
+                                tasks.push(
+                                    self.toasts
+                                        .push(toaster::Toast::new(format!(
+                                            "Failed to load {member}: {error}"
+                                        )))
+                                        .map(Action::App),
+                                );
+                            }
+                            false
+                        }
+                    }
                 };
-                if generation != archive.generation {
-                    return Task::none();
-                }
-                archive.pending.remove(&index);
-                match result {
-                    Ok(loaded) => {
-                        let first = archive.index.saturating_sub(3);
-                        let last = archive
-                            .index
-                            .saturating_add(3)
-                            .min(archive.catalog.entries().len().saturating_sub(1));
-                        if index < first || index > last {
-                            return Task::none();
-                        }
-                        let image = ArchiveCachedImage {
-                            handle: loaded.handle.clone(),
-                            image: loaded.image,
-                            width: loaded.width,
-                            height: loaded.height,
-                        };
-                        let selected = archive.index == index;
-                        archive.cache.insert(index, image);
-                        trim_archive_cache(archive);
-                        if selected {
-                            self.viewport.set_image(
-                                Some(CanvasImage {
-                                    handle: loaded.handle,
-                                    width: loaded.width,
-                                    height: loaded.height,
-                                }),
-                                None,
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        let member = archive
-                            .catalog
-                            .entries()
-                            .get(index)
-                            .map_or_else(|| format!("entry {index}"), |entry| entry.name.clone());
-                        tracing::error!("Failed to load {member} from ZIP archive: {error}");
-                        if archive.index == index {
-                            tasks.push(
-                                self.toasts
-                                    .push(toaster::Toast::new(format!(
-                                        "Failed to load {member}: {error}"
-                                    )))
-                                    .map(Action::App),
-                            );
-                        }
-                    }
+                if display_changed {
+                    tasks.push(self.load_archive_window());
                 }
             }
             ViewerMessage::OpenRecent(_idx) => {}
@@ -5400,7 +5448,9 @@ fn tool_toggle_class(selected: bool) -> theme::Button {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_zip_in_directory, page_turn_allowed, scan_zip_files};
+    use super::{
+        archive_display_request_allowed, next_zip_in_directory, page_turn_allowed, scan_zip_files,
+    };
     use std::{
         fs,
         time::{Duration, Instant, SystemTime},
@@ -5418,6 +5468,30 @@ mod tests {
             Some(now),
             now + Duration::from_millis(100)
         ));
+    }
+
+    #[test]
+    fn archive_page_turns_wait_for_pending_displays_and_minimum_dwell() {
+        let now = Instant::now();
+        assert!(!archive_display_request_allowed(
+            Some(3),
+            Some(now - Duration::from_secs(1)),
+            false,
+            now
+        ));
+        assert!(!archive_display_request_allowed(
+            None,
+            Some(now),
+            false,
+            now + Duration::from_millis(99)
+        ));
+        assert!(archive_display_request_allowed(
+            None,
+            Some(now),
+            false,
+            now + Duration::from_millis(100)
+        ));
+        assert!(!archive_display_request_allowed(None, None, true, now));
     }
 
     #[test]
