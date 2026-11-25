@@ -10,6 +10,16 @@ Images are decoded in memory without extraction to disk.
 
 Thumbnails are disabled in this mode.
 
+ZIP archives can be moved to the trash with **Delete** or **File → Move to trash**.
+Use **Undo** in the confirmation toast to restore the archive. After a successful
+delete, the viewer opens the next visible ZIP file in the same folder, ordered by
+filename.
+
+When viewing a ZIP, the sidebar lists ZIP files in the same folder with their
+sizes in MB. Click a row to open that archive; the current archive is highlighted.
+Scrolling over the image turns pages in both regular-image and ZIP viewing modes.
+Mouse-wheel and keyboard page turns are rate-limited to one every 100 ms.
+
 ## [Workflow] Added /.github/workflows/build.yml 
 for Github Actions to build executables on workflow_dispatch (manual trigger).
 

@@ -28,6 +28,8 @@ wallpaper-cancel = Cancel
 
 # Toast
 toast-undo = Undo
+archive-list-filename = Filename
+archive-list-size = Size (MB)
 
 # Menu - Edit
 menu-edit = Edit

@@ -13,7 +13,8 @@ use crate::{
 use cosmic::{
     Renderer,
     iced::widget::canvas::Frame,
-    iced::{Color, Point, Rectangle, Size, mouse},
+    iced::{Color, Point, Rectangle, Size},
+    // iced::{Color, Point, Rectangle, Size, mouse},
 };
 use image::DynamicImage;
 use tiny_skia::{LineCap as SkiaLineCap, Rect};

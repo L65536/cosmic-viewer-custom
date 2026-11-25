@@ -15,9 +15,6 @@ use cosmic::{
 };
 use viewer_tools::ToolOperation;
 
-/// Per-pixel touchpad zoom sensitivity. Lower = slower.
-const PIXEL_ZOOM_RATE: f32 = 0.0025;
-
 /// Scale to fit an image within the frame, capped at 1.0: images smaller than the
 /// frame render at actual size rather than being upscaled to fill (fit never
 /// enlarges - so a tiny icon opens at 100%, not thousands of percent).
@@ -58,6 +55,40 @@ impl ViewerCanvas<'_> {
             let scale = self.zoom * fit_scale;
             image.width as f32 * scale > bounds.width || image.height as f32 * scale > bounds.height
         })
+    }
+}
+
+fn wheel_page_message(delta: &mouse::ScrollDelta) -> Option<CanvasMessage> {
+    let y = match delta {
+        mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => *y,
+    };
+
+    if y > 0.0 {
+        Some(CanvasMessage::PreviousPage)
+    } else if y < 0.0 {
+        Some(CanvasMessage::NextPage)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wheel_page_message;
+    use crate::state::CanvasMessage;
+    use cosmic::iced::mouse::ScrollDelta;
+
+    #[test]
+    fn wheel_direction_selects_previous_or_next_page() {
+        assert!(matches!(
+            wheel_page_message(&ScrollDelta::Lines { x: 0.0, y: 1.0 }),
+            Some(CanvasMessage::PreviousPage)
+        ));
+        assert!(matches!(
+            wheel_page_message(&ScrollDelta::Pixels { x: 0.0, y: -25.0 }),
+            Some(CanvasMessage::NextPage)
+        ));
+        assert!(wheel_page_message(&ScrollDelta::Lines { x: 0.0, y: 0.0 }).is_none());
     }
 }
 
@@ -104,20 +135,7 @@ impl Program<CanvasMessage, Theme, Renderer> for ViewerCanvas<'_> {
                     Some(Action::capture())
                 }
                 MouseEvent::WheelScrolled { delta } => {
-                    let msg = match delta {
-                        mouse::ScrollDelta::Lines { y, .. } => {
-                            if *y < 0.0 {
-                                CanvasMessage::ZoomOut
-                            } else {
-                                CanvasMessage::ZoomIn
-                            }
-                        }
-                        mouse::ScrollDelta::Pixels { y, .. } => {
-                            CanvasMessage::ZoomBy((1.0 + y * PIXEL_ZOOM_RATE).clamp(0.5, 2.0))
-                        }
-                    };
-
-                    Some(Action::publish(msg))
+                    wheel_page_message(delta).map(Action::publish)
                 }
                 _ => None,
             },

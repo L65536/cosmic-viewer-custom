@@ -56,13 +56,14 @@ use std::{
     fmt::Write as _,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use viewer_canvas::{CanvasImage, CanvasMessage, ToolKind, ViewportManager};
 use viewer_config::{AppTheme, ViewerConfig};
 use viewer_core::{
-    ArchiveCatalog, CachedImage, ClipboardImage, ImageCache, NavState, get_image_dir,
-    image_mime_type, is_supported_image, load_image, load_thumbnail, read_dpi, scan_dir,
+    ArchiveCatalog, CachedImage, ClipboardImage, ImageCache, NavState, archive_read_queue_is_full,
+    get_image_dir, image_mime_type, is_supported_image, load_image, load_thumbnail, read_dpi,
+    scan_dir,
 };
 use viewer_toolbar::{ItemPriority, ToolbarItem, ToolbarMode, responsive_toolbar};
 use viewer_tools::{
@@ -94,6 +95,11 @@ enum TextStyle {
 
 const ARCHIVE_CACHE_BUDGET: u64 = 256 * 1024 * 1024;
 const ARCHIVE_TEXTURE_LIMIT: u64 = 2048;
+const PAGE_TURN_RATE_LIMIT: Duration = Duration::from_millis(100);
+
+fn page_turn_allowed(last_turn: Option<Instant>, now: Instant) -> bool {
+    last_turn.is_none_or(|last| now.duration_since(last) >= PAGE_TURN_RATE_LIMIT)
+}
 
 struct ArchiveCachedImage {
     handle: Handle,
@@ -118,6 +124,80 @@ fn archive_cached_image_bytes(image: &ArchiveCachedImage) -> u64 {
     decoded + texture
 }
 
+fn next_zip_in_directory(
+    archive_path: &Path,
+    include_hidden: bool,
+) -> std::io::Result<Option<PathBuf>> {
+    let directory = archive_path
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let current_name = archive_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let archives = scan_zip_files(directory, include_hidden)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| path.file_name() != archive_path.file_name())
+        .collect::<Vec<_>>();
+    Ok(archives
+        .iter()
+        .find(|path| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase()
+                > current_name
+        })
+        .cloned()
+        .or_else(|| archives.into_iter().next()))
+}
+
+fn scan_zip_files(directory: &Path, include_hidden: bool) -> std::io::Result<Vec<(PathBuf, u64)>> {
+    let mut archives = std::fs::read_dir(directory)?
+        .map(|entry| {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = entry.metadata()?;
+            let is_hidden = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'));
+            Ok((path, metadata.is_file(), metadata.len(), is_hidden))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|(path, is_file, size, is_hidden)| {
+            (is_file
+                && (include_hidden || !is_hidden)
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip")))
+            .then_some((path, size))
+        })
+        .collect::<Vec<_>>();
+    archives.sort_by(|(left, _), (right, _)| {
+        let left_name = left
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        let right_name = right
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        left_name.cmp(&right_name).then_with(|| {
+            left.file_name()
+                .unwrap_or_default()
+                .cmp(right.file_name().unwrap_or_default())
+        })
+    });
+    Ok(archives)
+}
+
 // reason: independent UI toggle flags (text styles, popups, fullscreen, prefs);
 // grouping into a bitflags type would obscure their distinct meanings.
 #[allow(clippy::struct_excessive_bools)]
@@ -130,12 +210,16 @@ pub struct CosmicViewer {
     app_themes: Vec<String>,
     nav: NavState,
     archive: Option<ArchiveView>,
+    archive_files: Vec<(PathBuf, u64)>,
     archive_opening: bool,
     archive_generation: u64,
+    archive_nav_bar_was_active: Option<bool>,
     nav_bar_model: nav_bar::Model,
     cache: ImageCache,
     nav_handles: Vec<Option<Handle>>,
     scroll_id: Id,
+    last_wheel_page: Option<Instant>,
+    last_keyboard_page: Option<Instant>,
     viewport: ViewportManager,
     context_page: Option<ContextMessage>,
     context_menu_position: Option<Point>,
@@ -303,6 +387,8 @@ impl CosmicViewer {
     }
 
     fn open_path(&mut self, path: PathBuf) -> Task<Action<ViewerMessage>> {
+        self.last_wheel_page = None;
+        self.last_keyboard_page = None;
         if path.is_file()
             && path
                 .extension()
@@ -311,7 +397,12 @@ impl CosmicViewer {
             self.archive_generation = self.archive_generation.wrapping_add(1);
             let generation = self.archive_generation;
             self.archive = None;
+            self.archive_files.clear();
             self.archive_opening = true;
+            if self.archive_nav_bar_was_active.is_none() {
+                self.archive_nav_bar_was_active = Some(self.core.nav_bar_active());
+            }
+            self.core.nav_bar_set_toggled(true);
             self.nav = NavState::new();
             self.nav_handles.clear();
             self.cache.clear();
@@ -321,6 +412,11 @@ impl CosmicViewer {
             self.context_menu_position = None;
 
             let archive_path = path.clone();
+            let zip_directory = path
+                .parent()
+                .filter(|directory| !directory.as_os_str().is_empty())
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+            let include_hidden = self.config.show_hidden_files;
             let title = format!(
                 "{} - {}",
                 path.file_name()
@@ -341,6 +437,11 @@ impl CosmicViewer {
                         .map_err(|error| error.to_string());
                     Action::App(ViewerMessage::ArchiveOpened(generation, result))
                 }),
+                future(async move {
+                    let result = scan_zip_files(&zip_directory, include_hidden)
+                        .map_err(|error| format!("Failed to scan ZIP files: {error}"));
+                    Action::App(ViewerMessage::ArchiveFilesScanned(generation, result))
+                }),
                 title_task,
             ]);
         }
@@ -348,7 +449,11 @@ impl CosmicViewer {
         self.archive_generation = self.archive_generation.wrapping_add(1);
         let generation = self.archive_generation;
         self.archive = None;
+        self.archive_files.clear();
         self.archive_opening = false;
+        if let Some(nav_bar_was_active) = self.archive_nav_bar_was_active.take() {
+            self.core.nav_bar_set_toggled(nav_bar_was_active);
+        }
 
         if let Some(dir) = get_image_dir(&path) {
             let select = path.is_file().then_some(path);
@@ -471,13 +576,65 @@ impl CosmicViewer {
                 }),
                 None,
             );
-        } else {
-            self.viewport.set_image(None, None);
         }
         self.viewport.cancel_tool();
         self.text_editing = false;
 
         self.load_archive_window()
+    }
+
+    fn page_target(&self, next: bool) -> Option<usize> {
+        let total = self.image_total();
+        if total == 0 {
+            return None;
+        }
+
+        let current = self.selected_index().unwrap_or(0).min(total - 1);
+        let target = if next {
+            (current + 1).min(total - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        (target != current).then_some(target)
+    }
+
+    fn navigate_to_page(&mut self, index: usize) -> Task<Action<ViewerMessage>> {
+        if self.is_archive_mode() {
+            return self.update(ViewerMessage::Nav(NavMessage::GridActivate(index)));
+        }
+
+        let offset = self.grid_scroll_offset(index);
+        Task::batch(vec![
+            self.update(ViewerMessage::Nav(NavMessage::GridFocus(index))),
+            self.update(ViewerMessage::Nav(NavMessage::GridScroll(offset))),
+            self.update(ViewerMessage::Nav(NavMessage::GridActivate(index))),
+        ])
+    }
+
+    fn turn_page_from_wheel(&mut self, next: bool) -> Task<Action<ViewerMessage>> {
+        let Some(index) = self.page_target(next) else {
+            return Task::none();
+        };
+        let now = Instant::now();
+        if !page_turn_allowed(self.last_wheel_page, now) {
+            return Task::none();
+        }
+
+        self.last_wheel_page = Some(now);
+        self.navigate_to_page(index)
+    }
+
+    fn turn_page_from_keyboard(&mut self, next: bool) -> Task<Action<ViewerMessage>> {
+        let Some(index) = self.page_target(next) else {
+            return Task::none();
+        };
+        let now = Instant::now();
+        if !page_turn_allowed(self.last_keyboard_page, now) {
+            return Task::none();
+        }
+
+        self.last_keyboard_page = Some(now);
+        self.navigate_to_page(index)
     }
 
     // reason: thumbnail size and grid index are small in-range counts; exact as f32.
@@ -1682,12 +1839,16 @@ impl Application for CosmicViewer {
             app_themes,
             nav: NavState::new(),
             archive: None,
+            archive_files: Vec::new(),
             archive_opening: false,
             archive_generation: 0,
+            archive_nav_bar_was_active: None,
             nav_bar_model: nav_bar::Model::default(),
             cache: ImageCache::with_defaults(),
             nav_handles: Vec::new(),
             scroll_id,
+            last_wheel_page: None,
+            last_keyboard_page: None,
             viewport: ViewportManager::default(),
             context_page: None,
             context_menu_position: None,
@@ -1796,6 +1957,7 @@ impl Application for CosmicViewer {
             self.viewport.can_redo(),
             has_image,
             self.is_archive_mode(),
+            self.archive.is_some() || (!self.is_archive_mode() && has_image),
         )]
     }
 
@@ -1832,8 +1994,87 @@ impl Application for CosmicViewer {
     // reason: thumbnail size is a small in-range pixel count; exact as f32.
     #[allow(clippy::cast_precision_loss)]
     fn nav_bar(&self) -> Option<Element<'_, Action<Self::Message>>> {
-        if self.is_archive_mode() || !self.core().nav_bar_active() {
+        if !self.core().nav_bar_active() {
             return None;
+        }
+
+        if let Some(archive) = &self.archive {
+            let current_path = archive.catalog.path();
+            let entries = self
+                .archive_files
+                .iter()
+                .map(|(path, size)| -> Element<'_, Action<ViewerMessage>> {
+                    let name = path
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                    let size_mb = *size as f64 / (1024.0 * 1024.0);
+                    let selected = path.file_name() == current_path.file_name();
+                    let row = Row::new()
+                        .spacing(8.0)
+                        .push(text(name).width(Length::Fill))
+                        .push(
+                            text(format!("{size_mb:.2}"))
+                                .width(Length::Fixed(58.0))
+                                .align_x(Horizontal::Right),
+                        );
+                    let item = container(row)
+                        .width(Length::Fill)
+                        .padding([7.0, 10.0])
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(if selected {
+                                Color::from_rgb(0.20, 0.32, 0.48)
+                            } else {
+                                Color::from_rgb(0.10, 0.10, 0.10)
+                            })),
+                            text_color: Some(Color::WHITE),
+                            ..Default::default()
+                        });
+                    mouse_area(item)
+                        .on_press(Action::App(ViewerMessage::Open(path.clone())))
+                        .into()
+                })
+                .fold(Column::new(), |column, item| column.push(item));
+            let header = Row::new()
+                .spacing(8.0)
+                .push(text(fl!("archive-list-filename")).width(Length::Fill))
+                .push(
+                    text(fl!("archive-list-size"))
+                        .width(Length::Fixed(58.0))
+                        .align_x(Horizontal::Right),
+                );
+            let content = Column::new()
+                .push(
+                    container(header)
+                        .width(Length::Fill)
+                        .padding([8.0, 10.0])
+                        .style(|_| container::Style {
+                            background: Some(Background::Color(Color::from_rgb(0.06, 0.06, 0.06))),
+                            text_color: Some(Color::WHITE),
+                            ..Default::default()
+                        }),
+                )
+                .push(scrollable(entries).height(Length::Fill))
+                .height(Length::Fill);
+
+            return Some(
+                container(content)
+                    .width(Length::Fixed(260.0))
+                    .height(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color::from_rgb(0.08, 0.08, 0.08))),
+                        text_color: Some(Color::WHITE),
+                        ..Default::default()
+                    })
+                    .into(),
+            );
+        }
+
+        if self.is_archive_mode() {
+            return Some(
+                container(Space::new().width(Length::Fixed(260.0)))
+                    .height(Length::Fill)
+                    .into(),
+            );
         }
 
         let thumbnail_size = self.config.thumbnail_size.pixels();
@@ -2208,9 +2449,6 @@ impl Application for CosmicViewer {
                     | ViewerMessage::SavedAs(_)
                     | ViewerMessage::SetWallpaper
                     | ViewerMessage::SetWallpaperOn(_, _)
-                    | ViewerMessage::MoveToTrash
-                    | ViewerMessage::UndoTrash(_, _)
-                    | ViewerMessage::UndoTrashStart(_)
                     | ViewerMessage::WatcherEvent(_)
                     | ViewerMessage::WatcherRescan
                     | ViewerMessage::Edit(_)
@@ -2425,12 +2663,35 @@ impl Application for CosmicViewer {
                         tasks.push(self.load_archive_window());
                     }
                     Err(error) => {
+                        self.archive_generation = self.archive_generation.wrapping_add(1);
+                        self.archive_files.clear();
+                        if let Some(nav_bar_was_active) = self.archive_nav_bar_was_active.take() {
+                            self.core.nav_bar_set_toggled(nav_bar_was_active);
+                        }
                         tracing::error!("Failed to open ZIP archive: {error}");
                         tasks.push(
                             self.toasts
                                 .push(toaster::Toast::new(format!(
                                     "Failed to open ZIP archive: {error}"
                                 )))
+                                .map(Action::App),
+                        );
+                    }
+                }
+            }
+            ViewerMessage::ArchiveFilesScanned(generation, result) => {
+                if generation != self.archive_generation {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok(files) => self.archive_files = files,
+                    Err(error) => {
+                        self.archive_files.clear();
+                        tracing::error!("{error}");
+                        tasks.push(
+                            self.toasts
+                                .push(toaster::Toast::new(error))
                                 .map(Action::App),
                         );
                     }
@@ -2701,7 +2962,26 @@ impl Application for CosmicViewer {
             }
             ViewerMessage::MoveToTrash => {
                 self.context_menu_position = None;
-                if let Some(path) = self.nav.current().cloned() {
+                if let Some(archive) = &self.archive {
+                    let path = archive.catalog.path().to_path_buf();
+                    let generation = archive.generation;
+                    let include_hidden = self.config.show_hidden_files;
+
+                    tasks.push(future(async move {
+                        let result = next_zip_in_directory(&path, include_hidden)
+                            .map_err(|error| {
+                                format!("Failed to find the next ZIP archive: {error}")
+                            })
+                            .and_then(|next_path| {
+                                trash::delete(&path)
+                                    .map_err(|error| {
+                                        format!("Failed to move ZIP archive to trash: {error}")
+                                    })
+                                    .map(|()| next_path)
+                            });
+                        Action::App(ViewerMessage::ArchiveTrashResult(generation, path, result))
+                    }));
+                } else if let Some(path) = self.nav.current().cloned() {
                     let next_idx = self.nav.index().and_then(|idx| {
                         if idx > 0 {
                             Some(idx - 1)
@@ -2745,46 +3025,117 @@ impl Application for CosmicViewer {
                 self.toasts.remove(toast_id);
 
                 tasks.push(future(async move {
-                    // Rescan trash to find matching TrashItem entries
                     let mut items_to_restore = Vec::new();
+                    let result = trash::os_limited::list()
+                        .map_err(|error| format!("Failed to inspect trash: {error}"))
+                        .and_then(|trash_items| {
+                            for path in &*recently_trashed {
+                                let target_parent = path.parent().unwrap_or_else(|| Path::new("/"));
+                                let target_name =
+                                    path.file_name().unwrap_or_default().to_string_lossy();
 
-                    if let Ok(trash_items) = trash::os_limited::list() {
-                        for path in &*recently_trashed {
-                            let target_parent = path.parent().unwrap_or_else(|| Path::new("/"));
-                            let target_name =
-                                path.file_name().unwrap_or_default().to_string_lossy();
-
-                            for item in &trash_items {
-                                if item.original_parent == target_parent
-                                    && item.name == target_name.as_ref()
-                                {
-                                    items_to_restore.push(item.clone());
-                                    break;
+                                for item in &trash_items {
+                                    if item.original_parent == target_parent
+                                        && item.name == target_name.as_ref()
+                                    {
+                                        items_to_restore.push(item.clone());
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                    }
-                    Action::App(ViewerMessage::UndoTrashStart(items_to_restore))
+
+                            if items_to_restore.is_empty() {
+                                Err("Could not find the deleted file in trash".to_string())
+                            } else {
+                                Ok(items_to_restore)
+                            }
+                        });
+                    Action::App(ViewerMessage::UndoTrashStart(result))
                 }));
             }
-            ViewerMessage::UndoTrashStart(items) => {
-                if !items.is_empty() {
-                    let restore = future(async move {
-                        if let Err(e) = trash::os_limited::restore_all(items) {
-                            tracing::error!("failed to restore from trash: {e}");
-                        }
-
-                        // Trigger a directory rescan
-                        Action::App(ViewerMessage::Cancelled)
-                    });
-
-                    // Rescan the directory to pickup the restored image
-                    tasks.push(restore.chain(self.reload_image_list()));
+            ViewerMessage::UndoTrashStart(result) => match result {
+                Ok(items) => {
+                    tasks.push(future(async move {
+                        let result = trash::os_limited::restore_all(items)
+                            .map_err(|error| format!("Failed to restore from trash: {error}"));
+                        Action::App(ViewerMessage::UndoTrashComplete(result))
+                    }));
                 }
-            }
+                Err(error) => {
+                    tracing::error!("{error}");
+                    tasks.push(
+                        self.toasts
+                            .push(toaster::Toast::new(error))
+                            .map(Action::App),
+                    );
+                }
+            },
+            ViewerMessage::UndoTrashComplete(result) => match result {
+                Ok(()) => tasks.push(self.reload_image_list()),
+                Err(error) => {
+                    tracing::error!("{error}");
+                    tasks.push(
+                        self.toasts
+                            .push(toaster::Toast::new(error))
+                            .map(Action::App),
+                    );
+                }
+            },
             ViewerMessage::TrashResult(result) => {
                 if let Err(e) = result {
                     tracing::error!("failed to move to trash: {e}");
+                }
+            }
+            ViewerMessage::ArchiveTrashResult(generation, trashed_path, result) => {
+                if generation != self.archive_generation {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok(next_path) => {
+                        let file_name = trashed_path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("file")
+                            .to_string();
+                        let paths: Arc<[PathBuf]> = Arc::from(vec![trashed_path]);
+                        let toast = toaster::Toast::new(format!("Moved {file_name} to trash"))
+                            .action(fl!("toast-undo"), move |id| {
+                                ViewerMessage::UndoTrash(id, paths.clone())
+                            })
+                            .duration(toaster::Duration::Long);
+                        tasks.push(self.toasts.push(toast).map(Action::App));
+
+                        if let Some(path) = next_path {
+                            tasks.push(self.open_path(path));
+                        } else {
+                            self.archive_generation = self.archive_generation.wrapping_add(1);
+                            self.archive = None;
+                            self.archive_files.clear();
+                            self.archive_opening = false;
+                            self.viewport.set_image(None, None);
+                            self.context_menu_position = None;
+                            if let Some(nav_bar_was_active) = self.archive_nav_bar_was_active.take()
+                            {
+                                self.core.nav_bar_set_toggled(nav_bar_was_active);
+                            }
+
+                            if let Some(window_id) = self.core.main_window_id() {
+                                tasks.push(self.set_window_title(
+                                    format!("No Open File - {}", fl!("app-name")),
+                                    window_id,
+                                ));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!("{error}");
+                        tasks.push(
+                            self.toasts
+                                .push(toaster::Toast::new(error))
+                                .map(Action::App),
+                        );
+                    }
                 }
             }
             ViewerMessage::CloseToast(toast_id) => {
@@ -2815,30 +3166,8 @@ impl Application for CosmicViewer {
                 }
 
                 if matches!(key, Key::Named(Named::PageUp | Named::PageDown)) {
-                    let total = self.image_total();
-                    if total > 0 {
-                        let current = self.selected_index().unwrap_or(0);
-                        let idx = if matches!(key, Key::Named(Named::PageUp)) {
-                            current.saturating_sub(1)
-                        } else {
-                            (current + 1).min(total - 1)
-                        };
-                        if self.selected_index() != Some(idx) {
-                            if self.is_archive_mode() {
-                                return self
-                                    .update(ViewerMessage::Nav(NavMessage::GridActivate(idx)));
-                            }
-                            let thumbnail_size = self.config.thumbnail_size.pixels();
-                            let spacing = f32::from(theme::active().cosmic().spacing.space_s);
-                            return Task::batch(vec![
-                                self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx))),
-                                self.update(ViewerMessage::Nav(NavMessage::GridScroll(
-                                    idx as f32 * (thumbnail_size as f32 + spacing),
-                                ))),
-                                self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx))),
-                            ]);
-                        }
-                    }
+                    return self
+                        .turn_page_from_keyboard(matches!(key, Key::Named(Named::PageDown)));
                 }
                 if self.context_menu_position.is_some() && matches!(key, Key::Named(Named::Escape))
                 {
@@ -3139,48 +3468,12 @@ impl Application for CosmicViewer {
                     && (matches!(key, Key::Named(Named::ArrowLeft))
                         || matches!(key, Key::Named(Named::ArrowUp)))
                 {
-                    let idx = self.selected_index().unwrap_or(0);
-                    if idx > 0 {
-                        if self.is_archive_mode() {
-                            return self
-                                .update(ViewerMessage::Nav(NavMessage::GridActivate(idx - 1)));
-                        }
-                        let thumbnail_size = self.config.thumbnail_size.pixels();
-                        let t = theme::active();
-                        let t = t.cosmic();
-                        let space_s = f32::from(t.spacing.space_s);
-
-                        return Task::batch(vec![
-                            self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx - 1))),
-                            self.update(ViewerMessage::Nav(NavMessage::GridScroll(
-                                (idx - 1) as f32 * (thumbnail_size as f32 + space_s),
-                            ))),
-                            self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx - 1))),
-                        ]);
-                    }
+                    return self.turn_page_from_keyboard(false);
                 } else if modifiers == Modifiers::NONE
                     && (matches!(key, Key::Named(Named::ArrowRight))
                         || matches!(key, Key::Named(Named::ArrowDown)))
                 {
-                    let idx = self.selected_index().unwrap_or(0);
-                    if idx + 1 < self.image_total() {
-                        if self.is_archive_mode() {
-                            return self
-                                .update(ViewerMessage::Nav(NavMessage::GridActivate(idx + 1)));
-                        }
-                        let thumbnail_size = self.config.thumbnail_size.pixels();
-                        let t = theme::active();
-                        let t = t.cosmic();
-                        let space_s = f32::from(t.spacing.space_s);
-
-                        return Task::batch(vec![
-                            self.update(ViewerMessage::Nav(NavMessage::GridFocus(idx + 1))),
-                            self.update(ViewerMessage::Nav(NavMessage::GridScroll(
-                                (idx + 1) as f32 * (thumbnail_size as f32 + space_s),
-                            ))),
-                            self.update(ViewerMessage::Nav(NavMessage::GridActivate(idx + 1))),
-                        ]);
-                    }
+                    return self.turn_page_from_keyboard(true);
                 } else if let Some(msg) = keyboard_shortcut_handler(key, modifiers, text) {
                     return self.update(msg);
                 }
@@ -3288,6 +3581,9 @@ impl Application for CosmicViewer {
                 }
                 NavMessage::GridActivate(idx) => {
                     if self.archive.is_some() {
+                        if archive_read_queue_is_full() {
+                            return Task::none();
+                        }
                         tasks.push(self.select_archive_image(idx));
                     } else {
                         if self.nav.index() != Some(idx)
@@ -3448,6 +3744,8 @@ impl Application for CosmicViewer {
                 CanvasMessage::ContextMenu(point) => {
                     self.context_menu_position = point;
                 }
+                CanvasMessage::PreviousPage => return self.turn_page_from_wheel(false),
+                CanvasMessage::NextPage => return self.turn_page_from_wheel(true),
                 CanvasMessage::ZoomIn => self.zoom_by(1.25),
                 CanvasMessage::ZoomOut => self.zoom_by(1.0 / 1.25),
                 CanvasMessage::ZoomBy(factor) => self.zoom_by(factor),
@@ -5097,5 +5395,66 @@ fn tool_toggle_class(selected: bool) -> theme::Button {
                 t,
             )
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_zip_in_directory, page_turn_allowed, scan_zip_files};
+    use std::{
+        fs,
+        time::{Duration, Instant, SystemTime},
+    };
+
+    #[test]
+    fn page_turn_rate_limit_allows_turns_at_100_milliseconds() {
+        let now = Instant::now();
+        assert!(page_turn_allowed(None, now));
+        assert!(!page_turn_allowed(
+            Some(now),
+            now + Duration::from_millis(99)
+        ));
+        assert!(page_turn_allowed(
+            Some(now),
+            now + Duration::from_millis(100)
+        ));
+    }
+
+    #[test]
+    fn next_zip_skips_hidden_files_and_wraps_in_filename_order() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system clock is after Unix epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "cosmic-viewer-next-zip-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create test directory");
+        let first = directory.join("a.zip");
+        let second = directory.join("b.ZIP");
+        fs::write(&first, b"first").expect("create first archive");
+        fs::write(&second, b"second").expect("create second archive");
+        fs::write(directory.join(".hidden.zip"), []).expect("create hidden archive");
+        fs::write(directory.join("not-a-zip.txt"), []).expect("create unrelated file");
+
+        assert_eq!(
+            next_zip_in_directory(&first, false).expect("scan archive directory"),
+            Some(second.clone())
+        );
+        assert_eq!(
+            next_zip_in_directory(&second, false).expect("scan archive directory"),
+            Some(first)
+        );
+        assert_eq!(
+            scan_zip_files(&directory, false)
+                .expect("list ZIP files")
+                .iter()
+                .map(|(path, size)| (path.file_name().unwrap().to_owned(), *size))
+                .collect::<Vec<_>>(),
+            vec![("a.zip".into(), 5), ("b.ZIP".into(), 6),]
+        );
+
+        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

@@ -35,7 +35,7 @@ image.workspace = true
 dirs = "6.0.0"
 notify = "8.2.0"
 trash = "5.2.5"
-wallpaper = "3.2"
+# wallpaper = "3.2"
 smol_str = "0.3"
 paste = "1.0"
 

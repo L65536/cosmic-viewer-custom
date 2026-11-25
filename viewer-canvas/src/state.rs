@@ -35,6 +35,8 @@ pub enum CanvasMessage {
     ZoomIn,
     ZoomOut,
     ZoomBy(f32),
+    PreviousPage,
+    NextPage,
     Pan(Vector),
     ActualSize,
     FitToView,

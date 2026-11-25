@@ -83,7 +83,7 @@ pub trait ToolOperation: Debug {
         false
     }
 
-    fn hit_test(&self, point: Point, selected: bool) -> bool {
+    fn hit_test(&self, point: Point, _selected: bool) -> bool {
         self.bounds().is_some_and(|b| b.contains(point))
     }
 

@@ -13,7 +13,11 @@ use std::{collections::HashMap, sync::LazyLock};
 static MENU_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(|| cosmic::widget::Id::new("responsive-menu"));
 
-fn build_file_menu(has_image: bool, read_only: bool) -> Vec<menu::Item<MenuAction, String>> {
+fn build_file_menu(
+    has_image: bool,
+    read_only: bool,
+    can_move_to_trash: bool,
+) -> Vec<menu::Item<MenuAction, String>> {
     let mut items = vec![menu::Item::Button(
         fl!("menu-open-file"),
         None,
@@ -57,11 +61,11 @@ fn build_file_menu(has_image: bool, read_only: bool) -> Vec<menu::Item<MenuActio
         None,
         MenuAction::SetWallpaper,
     ));
-    items.push(make_button(
-        fl!("menu-move-to-trash"),
-        None,
-        MenuAction::MoveToTrash,
-    ));
+    items.push(if can_move_to_trash {
+        menu::Item::Button(fl!("menu-move-to-trash"), None, MenuAction::MoveToTrash)
+    } else {
+        menu::Item::ButtonDisabled(fl!("menu-move-to-trash"), None, MenuAction::MoveToTrash)
+    });
 
     items.push(menu::Item::Divider);
 
@@ -150,8 +154,9 @@ pub fn menu_bar<'a>(
     can_redo: bool,
     has_image: bool,
     read_only: bool,
+    can_move_to_trash: bool,
 ) -> Element<'a, ViewerMessage> {
-    let file_menu = build_file_menu(has_image, read_only);
+    let file_menu = build_file_menu(has_image, read_only, can_move_to_trash);
     let edit_menu = build_edit_menu(can_undo, can_redo, has_image, read_only);
     let view_menu = build_view_menu(has_image);
 

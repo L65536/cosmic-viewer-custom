@@ -7,7 +7,9 @@ pub mod loader;
 pub mod nav;
 
 // Re-exports
-pub use archive::{ArchiveCatalog, ArchiveEntry, ArchiveError, LoadedArchiveImage};
+pub use archive::{
+    ArchiveCatalog, ArchiveEntry, ArchiveError, LoadedArchiveImage, archive_read_queue_is_full,
+};
 pub use cache::{CachedImage, ImageCache};
 pub use clipboard::{ClipboardImage, image_mime_type};
 pub use loader::{LoadError, LoadedImage, load_image, load_thumbnail, read_dpi};

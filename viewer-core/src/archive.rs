@@ -24,6 +24,12 @@ static ARCHIVE_READS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_ARCHIVE_DECODES: Mutex<usize> = Mutex::new(0);
 static ARCHIVE_DECODES_READY: Condvar = Condvar::new();
 
+/// Whether the shared archive image-read queue has reached its limit.
+#[must_use]
+pub fn archive_read_queue_is_full() -> bool {
+    ARCHIVE_READS_IN_FLIGHT.load(Ordering::Acquire) >= MAX_QUEUED_ARCHIVE_READS
+}
+
 #[derive(Debug, Error)]
 pub enum ArchiveError {
     #[error("Failed to open ZIP archive: {0}")]
