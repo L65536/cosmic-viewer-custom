@@ -1,4 +1,4 @@
-Disclaimer: Almost all of the committed codes in this fork are AI generated. 
+Disclaimer: All of the committed codes in this fork are AI generated. 
 
 # Changes and plans for the fork
 
@@ -28,7 +28,7 @@ Disclaimer: Almost all of the committed codes in this fork are AI generated.
 - [+] [-] = Zoom
 - [F5] [middle-click] = Full screen toggle
 - [Home] [End] = First or Last page
-- // [F11] was already used for windowed/maximized toggle.(by OS/DE)
+- [F11] was already used for windowed/maximized toggle by OS/DE.
 
 # Work in progress:
 
@@ -48,4 +48,4 @@ Disclaimer: Almost all of the committed codes in this fork are AI generated.
 - [SKIP] Auto continue from last session on launch
 Use path in command line argument instead. 
 
-Disclaimer: Almost all of the committed the codes in this fork are AI generated. 
+Disclaimer: All of the committed the codes in this fork are AI generated. 
